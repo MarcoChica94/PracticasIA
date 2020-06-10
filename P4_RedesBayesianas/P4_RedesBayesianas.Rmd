@@ -1,0 +1,347 @@
+---
+title: "Práctica 4: Redes Bayesianas"
+author: "Ingeniería Electrónica - Inteligencia Artificial"
+date: "29/05/2020"
+output: 
+   bookdown::html_document2: 
+    toc: true # table of content true
+---
+
+```{r warning=FALSE, message=FALSE,echo=FALSE}
+rm(list=ls())   # borrar todo lo que esté en memoria
+options(encoding = "Latin1")
+
+#Instalar librerias necesarias
+if(!require(knitr)){install.packages("knitr")} #compilar en html
+if(!require(rmdformats)){install.packages("rmdformats")}#compilar en html
+if(!require(tidyverse)){install.packages("tidyverse")}
+if(!require(DAAG)){install.packages("DAAG")}
+if(!require(visNetwork)){install.packages("visNetwork")}
+if(!require(splitstackshape)){install.packages("splitstackshape")}
+if(!require(parallel)){install.packages("parallel")}
+if(!require(snow)){install.packages("snow")}
+if(!require(bnlearn)){install.packages("bnlearn")}
+if(!require(scales)){install.packages("scales")}
+if(!require(reshape2)){install.packages("reshape2")}
+if(!require(Rgraphviz)){install.packages("Rgraphviz")}
+if(!require(ggpubr)){install.packages("ggpubr")}
+if(!require(caret)){install.packages("caret")}
+
+# Cargar librerías
+library(knitr)
+library(rmdformats)
+library(visNetwork)
+
+set.seed(2020)
+
+# Opciones globales
+ options(max.print="75")
+ opts_chunk$set(message=FALSE,
+                warning=FALSE)
+  opts_knit$set(width=75)
+```
+
+# Redes Bayesianas
+Las redes Bayesianas son modelos gráficos probabilísticos y tienen  características que las hacen útiles para muchos problemas. Están estructuradas de una manera que nos permite calcular la probabilidad condicional de un evento dada la evidencia. La representación gráfica facilita la comprensión de las relaciones entre las variables y se utilizan en muchas soluciones de IA donde las decisiones deben automatizarse en una variedad de contextos, como el diagnóstico médico, el modelado y la mitigación de riesgos. Las redes Bayesianas son convenientes cuando hay un sistema complejo con muchas relaciones causales.
+
+Algunos beneficios clave de las redes Bayesianas incluyen:
+
+* Visualización de las relaciones casuales y la independencia de variables mediante representación gráfica.
+* Todos los parámetros son interpretables.
+* El modelo puede consultarse fácilmente para calcular cualquier probabilidad condicional
+* Se pueden hacer predicciones sobre cualquier variable, en lugar de que exista una distinción entre una variable dependiente *y*  y una explicatoria *x* como en un modelo de regresión.
+* Puede manejar datos faltantes o escasos.
+* Las relaciones se pueden encadenar, lo que permite una inferencia y escalabilidad más complejas.
+
+En esta práctica, construiremos una red Bayesiana con el conjunto de datos `AIS` que se encuentra en el paquete `DAAG`. Este conjunto de datos fue utilizado para determinar si existía una diferencia en los niveles medios de hemoglobina para diferentes disciplinas deportivas. Como análsis exploratorio, creamos un diagrama de caja que compara la distribución de los niveles de hemoglobina para los diferentes deportes, de manera para tener conocimiento de los datos.
+
+## Conjunto de datos
+```{r hg-plot, fig.cap="Distribución de hemoglobina"}
+# Cargar dataset
+data(ais)
+# Revisar dataset ais
+#?ais
+head(ais)
+# Asignar a nueva variable
+ais_df <- ais
+colnames(ais_df)[12] <- "sexo"
+colnames(ais_df)[13] <- "deporte"
+head(ais_df)
+
+
+# Graficar diagrama de caja
+ggplot(ais_df, aes(x = deporte, y = hg, fill = deporte)) + geom_boxplot() + xlab("Deporte") + ylab("hg (g por decalitro)")
+```
+
+Los diagramas de caja sugerirían que existen algunas diferencias. Podemos usar esto para dirigir la construcción de nuestra red bayesiana.
+
+## Caso discreto
+Comenzaremos construyendo una red simple usando 3 variables: [hematocrito](https://www.mayoclinic.org/es-es/tests-procedures/hematocrit/about/pac-20384728) (**hc**) que es el porcentaje en volumen de glóbulos rojos en la sangre, el tipo de **deporte** y la concentración de hemoglobina (**hg**). Las mediciones de hematocrito y hemoglobina son variables continuas. Por simplicidad, estas se transformarán en variables binarias y extraemos los datos de solo 3 deportes: netball, tenis y waterpolo. Estos deportes son escogidos ya que existe una clara diferencia entre sus niveles de hemoglobina como se muestra en la figura \@ref(fig:hg-plot). Se creará un gráfico vacío seguido de ingresar la estructura manualmente.
+
+```{r}
+# Establecer variables booleanas
+ais_df$alto_hc <- as.factor(ais$hc > median(ais$hc))
+ais_df$alto_hg <- as.factor(ais$hg > median(ais$hg))
+
+# Crear un grafo vacío
+estructura <- empty.graph(c("alto_hc", "alto_hg", "deporte"))
+
+# Establecer relaciones manualmente
+modelstring(estructura) <- "[alto_hc][deporte][alto_hg|deporte:alto_hc]"
+
+# Función para graficar la red usando el paquete visNetwork
+plot.network <- function(estructura, ht = "400px"){
+  nodos.uniq <- unique(c(estructura$arcs[,1], estructura$arcs[,2]))
+  nodos <- data.frame(id = nodos.uniq,
+                      label = nodos.uniq,
+                      color = "coral",
+                      shadow = TRUE)
+
+  arcos <- data.frame(from = estructura$arcs[,1],
+                      to = estructura$arcs[,2],
+                      arrows = "to",
+                      smooth = TRUE,
+                      shadow = TRUE,
+                      color = "black")
+
+  return(visNetwork(nodos, arcos, height = ht, width = "100%"))
+}
+
+
+# Observar estructura
+plot.network(estructura)
+```
+
+Existen algoritmos que realizan este procesi, pero por ahora indicaremos las relaciones de manera explícita. La creación manual de la estructura a menudo es un buena práctica, ya que se debe comprender el sistema que se está tratando de modelar y no depender de una "caja negra" para que lo haga de manera autónoma. Dicho esto, una vez construida, ya sea manualmente o usando un algoritmo, la Red Bayesiana se entiende fácilmente a través de la representación gráfica y cada variable puede explicarse.
+
+La relación de esta red dice:
+
+* Los niveles de hemoglobina dependen condicionalmente de los niveles de hematocrito y del tipo de deporte.
+* Los tipos de deporte y los niveles de hematocrito son independientes.
+
+Ahora ajustaremos el modelo y mostraremos las probabilidades condicionales para cada nodo.
+```{r}
+ais_df.sub <- ais_df[ais_df$deporte %in% c("Netball", "Tennis", "W_Polo"), c("alto_hc", "alto_hg", "deporte")]
+ais_df.sub$deporte <- factor(ais_df.sub$deporte)
+bn.mod <- bn.fit(estructura, data = ais_df.sub)
+bn.mod
+```
+
+```{r}
+set.seed(1)
+cat("P(alto nivel hemaglobina) =", cpquery(bn.mod, (alto_hg=="TRUE"), TRUE, n=1000000))
+```
+
+```{r}
+set.seed(1)
+cat("P(alto nivel hemaglobina | entrena waterpolo y tiene alta tasa de hematocrito) =", cpquery(bn.mod, (alto_hg=="TRUE"), (deporte == "W_Polo" & alto_hc == "TRUE"), n=1000000))
+```
+
+Uno de las principales ventajas de las redes Bayesianas es que podemos cambiar el tipo de inferencia. Cada nodo puede ser sujeto de la consulta. Con el mismo modelo, podemos consultar la probabilidad de que un atleta entrene waterpolo dado que observamos altos niveles de hemoglobina o la probabilidad de tener altos niveles de hemoglobina dado que entrena waterpolo.
+
+```{r}
+set.seed(1)
+cat("P(entrena waterpolo | alto nivel hemoglobina y tiene alta tasa de hematocrito) =", cpquery(bn.mod, (deporte=="W_Polo"), (alto_hg == "TRUE" & alto_hc == "TRUE"), n=1000000))
+```
+
+Supongamos que no concemos la tasa de hematocrito del atleta, ¿podríamos calcular la probabilidad de que tenga niveles altos de hemoglobina dado que entrena waterpolo? Lo podemos calcular si solo sumamos la distribución de probabilidad de hematocrito. Afortunadamente, la función `cpquery` se encarga de esto.
+
+```{r}
+set.seed(1)
+cat("P(alto nivel hemoglobina | entrena waterpolo) =", cpquery(bn.mod, (alto_hg=="TRUE"), (deporte == "W_Polo"),n=1000000))
+```
+
+## Caso continuo
+Vamos a redefinir nuestra red simple con las verdaderas variables continuas. Asímismo, `bnlearn` maneja esto. Para el caso continuo, se estiman las densidades de probabilidad.
+
+```{r}
+# Crear un grafo vacío
+estructura <- empty.graph(c("hc", "hg", "deporte"))
+
+# Establecer relaciones manualmente
+modelstring(estructura) <- "[hc][deporte][hg|deporte:hc]"
+
+# subset y ajuste (fit)
+ais_df.sub <- ais_df[ais_df$deporte %in% c("Netball", "Tennis", "W_Polo"), c("hc", "hg", "deporte")]
+ais_df.sub$deporte <- factor(ais_df.sub$deporte)
+bn.mod <- bn.fit(estructura, data = ais_df.sub)
+bn.mod
+```
+
+Ahora, al consultar el modelo, debemos ser más específicos que en el caso discreto indicando un rango.
+
+```{r}
+set.seed(1)
+cat("P(nivel de hemoglobina > 14 | entrena waterpolo y tasa de hematocrito > 42) =", cpquery(bn.mod, (hg > 14), (deporte == "W_Polo" & hc > 42 ),n=1000000))
+```
+
+## Relaciones concatenadas
+Otra ventaja de las redes Bayesianas es que las variables se pueden concatenar o encadenar. Es decir, dos nodos no necesitan estar directamente conectados para hacer inferencia de uno sobre el otro. Agregaremos otra variable a nuestro modelo simple, la masa corporal magra (**lbm**) que se calcula como el peso corporal menos la grasa corporal en kilogramos, por lo que a mayor valor, más delgado es el atleta.
+
+```{r}
+# Crear un grafo vacío
+estructura <- empty.graph(c("hc", "hg", "deporte", "lbm"))
+
+# Establecer relaciones manualmente
+modelstring(estructura) <- "[lbm][hc|lbm][deporte][hg|deporte:hc]"
+plot.network(estructura)
+
+# subset y ajuste (fit)
+ais_df.sub <- ais_df[ais_df$deporte %in% c("Netball", "Tennis", "W_Polo"), c("hc", "hg", "deporte", "lbm")]
+ais_df.sub$deporte <- factor(ais_df.sub$deporte)
+bn.mod <- bn.fit(estructura, data = ais_df.sub)
+bn.mod
+```
+
+Ahora podemos consultar el modelo y calcular la probabilidad de que los atletas tengan niveles de hemoglobina superiores a 14 dado que entrenan waterpolo y tienen un LBM de más de 65kg sin tener conocimiento de su tasa de hematocrito.
+```{r}
+set.seed(1)
+cat("P(nivel de hemoglobina > 14 | entrena waterpolo y LBM > 65 kg) =", cpquery(bn.mod, (hg > 14), (deporte == "W_Polo" & lbm > 65 ), n=1000000))
+```
+
+## Estructura definida por algoritmo
+Para casos más grandes, se prefiere usar un algoritmo para definir la estructura de la red Bayesiana y luego poder agregar otras relaciones definidas por el usuario (de ser necesario). `bnlearn` incluye el algoritmo de *hill climbing* que es adecuado para esto. El puntaje predeterminado que utiliza para optimizar el modelo se denomica BIC (*Bayesian information criterion*). Hay muchos otros, como AIC (*Akaike information criterion*), puntaje Bayesiano Dirichlet, etc. Que pueden ser apropiados para diferentes problemas.
+
+```{r}
+# Aprender la estructura usando el algoritmo hill climbing y BIC
+estructura <- hc(ais_df.sub, score = "bic-cg")
+plot.network(estructura)
+```
+
+Como se puede observar, la topología generada es diferente a la definida anteriormente. Esta estructura se ajusta mejor a los datos maximizando el BIC, pero si entendemos el sistema con el que estamos tratando lo suficientemente bien, podemos ingresar las (manualmente) relaciones que sabemos que son importantes. Este es más el caso cuando los tamaños de muestra son pequeños, cuando son muy grandes podemos confiar más en el algoritmo para encontrar las relaciones correctas. Dicho esto, a menudo hay sesgos en los datos y si esos mecanismos se comprenden bien, las relaciones correctas también se pueden agregar en el modelo.
+
+```{r}
+set.seed(1)
+bn.mod <- bn.fit(estructura, data = ais_df.sub)
+cat("P(nivel de hemoglobina > 14 | entrena waterpolo y LBM > 65 kg) =", cpquery(bn.mod, (hg > 14), (deporte == "W_Polo" & lbm > 65 ), n=1000000))
+```
+
+## Modelo completo
+Ahora ajustaremos el modelo completo utilizando todas los variables disponibles luego de eliminar aquellas que son función de otras, p. ej. $BMI = WT / HT ^ 2$
+```{r}
+ais_df.sub <- ais_df[, c("hc", "hg", "deporte", "lbm", "rcc", "wcc", "ferr", "ht", "wt", "sexo", "ssf")]
+estructura <- hc(ais_df.sub, score = "bic-cg")
+bn.mod <- bn.fit(estructura, data = ais_df.sub)
+plot.network(estructura, ht = "600px")
+```
+
+## Aprevechar resultados
+Ajustar la red y consultar el modelo es solo una parte del análisis. Donde las redes de Bayesianas realmente brillan es en cómo se utilizan para tomar decisiones viables. En el ejemplo, ajustamos un modelo para ayudar a explicar los factores que influyen en la concentración de hemoglobina en un atleta. Pero supongamos que los niveles altos de hemoglobina se correlacionan con un mejor rendimiento, lo que probablemente sea cierto para los deportes de resistencia como correr o andar en bicicleta, pero no tanto para los deportes basados en habilidades como el baloncesto. El atleta podría tomar las medidas adecuadas para garantizar que sus concentraciones de hemoglobina estén en niveles óptimos. Las decisiones deben tomarse, por ejemplo, en relación a:
+
+* **Dieta**: qué comer en ciertos días, p. ej. días de entrenamiento versus días de reducción de ejercicio
+* **Entrenamiento**: cuándo aumentar o disminuir la intensidad y la frecuencia
+* **Descanso**: cuándo descansar un día o recuperarse después de un partido o de una carrera
+* **Enfermedad**: ¿cuánto tiempo necesita para recuperarse?
+
+Tomando en cuenta estas "intervenciones" en el modelo, el usuario puede implementar escenarios de "qué pasaría si" para ayudar a tomar la mejor decisión. Algunas de estas variables se pueden observar fácilmente, pero otras no, como el conteo de glóbulos rojos. Esta podría ser una medida que se toma una vez cada 2-3 meses, en cuyo caso las decisiones deberán tomarse sin el conocimiento del conteo actual de glóbulos rojos en los atletas. Afortunadamente, una red Bayesiana puede manejar este tipo de incertidumbre e información faltante.
+
+Las redes Bayesianas son muy flexibles y una versión extendida es una red Bayesiana dinámica que aporta un componente temporal. A medida que se recopilan nuevos datos, se agregan al modelo y se actualizan las probabilidades.
+
+# Redes Bayesianas para clasificación
+## Separar en datasets de entrenamiento y prueba
+```{r}
+datos <- ais[,-c(6,8)] # sin bmi, pcbfat
+colnames(datos)[10] <- "sexo"
+colnames(datos)[11] <- "deporte"
+datos$deporte <- as.character(datos$deporte)
+datos$sexo <- as.character(datos$sexo)
+datos <-  filter(datos, deporte %in% c("B_Ball", "Row", "T_400m"))
+
+# discretizar
+datos[,c("hc", "hg", "lbm", "rcc", "wcc", "ferr", "ht", "wt", "ssf")] <- discretize(datos[,c("hc", "hg", "lbm", "rcc", "wcc", "ferr", "ht", "wt", "ssf")])
+# datos como factores
+datos$deporte <- as.factor(datos$deporte)
+datos$sexo <- as.factor(datos$sexo)
+
+
+train <- data.frame(splitstackshape::stratified(datos,"deporte", .7,keep.rownames = TRUE))
+
+test<- data.frame(datos[- as.numeric(train$rn),])  # Set de datos de validacion
+
+#dim(train) #dimensiones de datos de entrenamientos
+table(train$deporte)
+#dim(test)#dimensiones de datos de test
+table(test$deporte)
+
+# Visualizar
+figure.datos<- rbind(data.frame(Categoria=datos$deporte, Tipo="Completo"),data.frame(Categoria=train$deporte, Tipo="Entrenamiento"),data.frame(Categoria=test$deporte, Tipo="Validacion"))
+
+
+pp <- ggplot(data=figure.datos, aes(x=Categoria, fill=Categoria)) + 
+      geom_bar(aes(y = (..count..)/sum(..count..)), position="dodge") + labs(x="", y="Porcentaje")
+pp + scale_y_continuous(labels = percent)+ facet_grid(~Tipo)
+pp
+
+```
+
+## Configuraciones
+
+```{r}
+
+#Configuracion para procesamiento en paralelo
+# detectCores() 
+cl = makeCluster(3, type = "SOCK") #different type perform acording hardware
+clusterSetRNGStream(cl, 25)# random seed
+
+bootstrength<-boot.strength(
+  data=datos,
+  algorithm = "hc",R = 100, m=500, cpdag=TRUE,  cluster = cl, algorithm.args = list(score = "aic"))
+
+ stopCluster(cl)
+
+```
+
+## Aprendizaje de parámetros
+```{r }
+av_net<- averaged.network(bootstrength, threshold = 0.2)
+graphviz.plot(av_net, shape = "rectangle")
+```
+
+Verificar restricciones de propiedades de las Redes Bayesianas. Comprobar si es un DAG
+```{r}
+acyclic(av_net)
+directed(av_net)
+```
+
+Si no es dirigido, lo transformamos en un DAG.
+```{r }
+#res = pdag2dag(av_net, ordering = nodes(av_net))
+# plot(res)
+# graphviz.plot(res)
+res=av_net #cumple condiciones DAG
+
+gR <- strength.plot(res, bootstrength, threshold = 0.30, shape = "rectangle", highlight = list(nodes=c("deporte"), fill="gray", col="black"), layout = "dot")
+
+```
+
+
+## Ajuste del modelo
+```{r }
+fitted <- bn.fit(res, data = datos, method = "mle")#tablas de probabilidad condicional
+true_dag <- model2network(modelstring(fitted))
+
+# Guardar achivo que se puede abrir en herramientas para redes Bayesianas
+#write.net(file="fitted.net", fitted) 
+```
+
+Comprobar nuevamente si es un DAG
+```{r}
+acyclic(fitted)
+directed(fitted)
+```
+
+## Validación
+```{r }
+pred.bn <-  predict(fitted, node = "deporte", test, method = "parents")
+bn.val<- confusionMatrix(pred.bn, test[, "deporte"])
+bn.val
+#ggtexttable(t(as.matrix(round(bn.val$byClass,3))))
+
+```
+
+```{r}
+#bn.val$table
+bn.ma<-ggplot(data.frame(melt(prop.table(bn.val$table))), aes(Prediction, Reference, fill=value))+geom_bin2d() +  geom_text(aes(label = round(value*nrow(test),0), colour="gray"), vjust = 1,show.legend = FALSE)   + labs(x="Observado", y="Predecido") 
+
+bn.ma
+```
